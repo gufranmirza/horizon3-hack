@@ -7,7 +7,9 @@
 > **Scope decisions (locked):** Bespoke hand-built · one end-to-end kill chain · **in-cluster only,
 > NO GCP/IAM cloud pivot** · honeypots to validate agents are real · difficulty tiers simple→advanced.
 >
-> **Status:** DESIGN ONLY. No manifests/Terraform written yet.
+> **Status:** BUILT & VALIDATED. Terraform in `deployment/terraform/`, manifests in
+> `deployment/manifests/`, machine-readable matrix in `docs/k8s-ground-truth.json`, and the
+> live-exploitation evidence in `docs/K8s-kill-chain-verification.md`.
 
 ---
 

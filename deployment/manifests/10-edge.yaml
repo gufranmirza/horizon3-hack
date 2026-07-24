@@ -1,0 +1,81 @@
+# =============================================================================
+# STAGE 0 — Edge (namespace: edge)
+# Plants: V03 internal admin service exposed via NodePort
+#         · V04 ingress annotation injection (configuration-snippet)
+# (V01 Dashboard + V02 vulnerable ingress-nginx are installed by scripts/deploy.sh
+#  because they need Helm / upstream manifests.)
+# The foothold Ingress that routes external traffic to shop-app is here too.
+# =============================================================================
+---
+# An "internal" admin console that should be ClusterIP-only...
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: internal-admin, namespace: edge, labels: { app: internal-admin } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: internal-admin } }
+  template:
+    metadata: { labels: { app: internal-admin } }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: web
+          image: nginx:1.25-alpine
+          ports: [{ containerPort: 80 }]
+---
+# V03: ...but it's published on a NodePort, reachable on every node's external IP.
+apiVersion: v1
+kind: Service
+metadata:
+  name: internal-admin
+  namespace: edge
+  labels: { sim.horizon3/vuln: "V03" }
+spec:
+  type: NodePort
+  selector: { app: internal-admin }
+  ports:
+    - { port: 80, targetPort: 80, nodePort: 30080 }
+---
+# Foothold entry: routes internet traffic to the vulnerable shop-app.
+# (Requires the ingress-nginx controller installed by deploy.sh.)
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: shop
+  namespace: shop
+  annotations:
+    kubernetes.io/ingress.class: nginx
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: shop-app, port: { number: 80 } }
+---
+# V04: ingress that injects raw NGINX config via configuration-snippet — an
+# attacker who can create/edit Ingress objects can inject directives (and, on
+# vulnerable controllers, escalate). Enabling snippets is itself the weakness.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: legacy-rewrite
+  namespace: edge
+  labels: { sim.horizon3/vuln: "V04" }
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Injected: sim-v04";
+      # attacker-controlled directives would land here
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: admin.sim.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: internal-admin, port: { number: 80 } }

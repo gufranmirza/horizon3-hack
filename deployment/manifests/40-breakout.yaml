@@ -1,0 +1,112 @@
+# =============================================================================
+# STAGE 4 — Pod -> Node breakout primitives (namespace: shop, PSA=privileged)
+# Plants: V16 privileged + hostPath / · V17 hostPID/hostNetwork/hostIPC
+#         · V18 containerd socket mount · V19 caps-only (SYS_ADMIN/SYS_PTRACE)
+# Decoy:  D05 (scary name/annotation, but effectively hardened -> not exploitable)
+# Modeled as Deployments (not bare Pods) so they survive node auto-repair.
+# =============================================================================
+---
+# V16 (T3): full breakout — privileged, host root filesystem mounted at /host.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: node-debugger, namespace: shop, labels: { app: node-debugger, sim.horizon3/vuln: "V16" } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: node-debugger } }
+  template:
+    metadata: { labels: { app: node-debugger, sim.horizon3/vuln: "V16" } }
+    spec:
+      containers:
+        - name: tools
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep infinity"]
+          securityContext: { privileged: true }
+          volumeMounts: [{ name: hostroot, mountPath: /host }]
+      volumes:
+        - name: hostroot
+          hostPath: { path: /, type: Directory }
+---
+# V17 (T3): host PID + network + IPC namespaces shared with the node.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: host-namespaces, namespace: shop, labels: { app: host-namespaces, sim.horizon3/vuln: "V17" } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: host-namespaces } }
+  template:
+    metadata: { labels: { app: host-namespaces, sim.horizon3/vuln: "V17" } }
+    spec:
+      hostPID: true
+      hostNetwork: true
+      hostIPC: true
+      containers:
+        - name: tools
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep infinity"]
+          securityContext: { privileged: true }
+---
+# V18 (T4): container runtime socket mounted in — talk to containerd directly.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: runtime-sock, namespace: shop, labels: { app: runtime-sock, sim.horizon3/vuln: "V18" } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: runtime-sock } }
+  template:
+    metadata: { labels: { app: runtime-sock, sim.horizon3/vuln: "V18" } }
+    spec:
+      containers:
+        - name: tools
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep infinity"]
+          volumeMounts: [{ name: cri, mountPath: /run/containerd/containerd.sock }]
+      volumes:
+        - name: cri
+          hostPath: { path: /run/containerd/containerd.sock, type: Socket }
+---
+# V19 (T4): NOT fully privileged, but SYS_ADMIN + SYS_PTRACE + hostPID.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: caps-escape, namespace: shop, labels: { app: caps-escape, sim.horizon3/vuln: "V19" } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: caps-escape } }
+  template:
+    metadata: { labels: { app: caps-escape, sim.horizon3/vuln: "V19" } }
+    spec:
+      hostPID: true
+      containers:
+        - name: tools
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep infinity"]
+          securityContext:
+            privileged: false
+            capabilities: { add: ["SYS_ADMIN", "SYS_PTRACE"] }
+---
+# D05 DECOY: name/annotation scream "privileged admin", but effective
+# securityContext is locked down. Should NOT be flagged as exploitable.
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: cluster-admin-toolbox, namespace: shop, labels: { app: cluster-admin-toolbox, sim.horizon3/decoy: "D05" } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: cluster-admin-toolbox } }
+  template:
+    metadata:
+      labels: { app: cluster-admin-toolbox, sim.horizon3/decoy: "D05" }
+      annotations: { sim.horizon3/note: "looks privileged; is actually hardened" }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: tools
+          image: busybox:1.36
+          command: ["sh", "-c", "sleep infinity"]
+          securityContext:
+            privileged: false
+            runAsNonRoot: true
+            runAsUser: 65534
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            limits: { cpu: "50m", memory: "32Mi" }

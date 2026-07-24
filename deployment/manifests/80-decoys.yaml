@@ -1,0 +1,73 @@
+# =============================================================================
+# DECOYS D01 + D04 (the rest — D02/D03/D05 — live inline in their stages)
+# Look vulnerable; are not exploitable. Reporting these = precision penalty.
+# =============================================================================
+---
+# D01: advertises "Server: nginx/1.11.0" (a version with known CVEs) but is
+# actually a current, patched build. A banner/version-only scanner will flag it;
+# a tool that verifies exploitability will not.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: legacy-web-src, namespace: edge }
+data:
+  web.py: |
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    class H(BaseHTTPRequestHandler):
+        server_version = "nginx/1.11.0"   # <- misleading banner (decoy)
+        sys_version = ""
+        def do_GET(self):
+            self.send_response(200); self.end_headers()
+            self.wfile.write(b"ok\n")
+        def log_message(self,*a): pass
+    HTTPServer(("0.0.0.0",8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: legacy-web, namespace: edge, labels: { app: legacy-web, sim.horizon3/decoy: "D01" } }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: legacy-web } }
+  template:
+    metadata: { labels: { app: legacy-web } }
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: web
+          image: python:3.11-slim
+          command: ["python3", "/app/web.py"]
+          ports: [{ containerPort: 8080 }]
+          volumeMounts: [{ name: src, mountPath: /app }]
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+      volumes:
+        - name: src
+          configMap: { name: legacy-web-src }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: legacy-web, namespace: edge }
+spec:
+  selector: { app: legacy-web }
+  ports: [{ port: 80, targetPort: 8080 }]
+  type: ClusterIP
+---
+# D04: a juicy-looking "deploy" SSH private key sitting in a Secret (readable via
+# V10). It is a throwaway keypair that authorizes NOTHING in this environment.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: deploy-ssh-key
+  namespace: backend
+  labels: { sim.horizon3/decoy: "D04" }
+type: Opaque
+stringData:
+  id_rsa: |
+    -----BEGIN OPENSSH PRIVATE KEY-----
+    H3-DECOY-D04-this-key-authorizes-nothing-in-this-lab
+    ZGVjb3kga2V5IC0gbm90IHVzYWJsZSAtIGRvIG5vdCBmbGFnIGFzIHZhbGlkIGFjY2Vzcwo=
+    -----END OPENSSH PRIVATE KEY-----
+  note: "decoy: no SSH targets exist in this in-cluster-only sim"

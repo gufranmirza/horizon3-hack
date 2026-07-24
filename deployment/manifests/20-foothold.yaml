@@ -1,0 +1,196 @@
+# =============================================================================
+# STAGE 1 — Foothold app "shop" (namespace: shop)
+# Plants: V05 SSRF · V06 command-injection RCE · V07 creds in env · V08 creds in
+#         source · V09 SA token automount · V10 SA can read secrets
+# Canaries: C01 (RCE-only flag file) · C02 (honeytoken DB password in env)
+# Decoy:    D02 (fake AWS key env)
+# Pure stdlib Python served from a ConfigMap — no image build/registry needed.
+# =============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: shop-app
+  namespace: shop
+# V09: automountServiceAccountToken not disabled (defaults to true) — token is
+# mounted into the pod at /var/run/secrets/kubernetes.io/serviceaccount/token.
+---
+# V10: this SA can LIST/GET secrets in shop AND backend — far too broad.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shop-secret-reader
+  namespace: shop
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shop-app-secret-reader
+  namespace: shop
+subjects:
+  - kind: ServiceAccount
+    name: shop-app
+    namespace: shop
+roleRef:
+  kind: Role
+  name: shop-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# Same SA also granted secret-read in the backend namespace (where C03 lives).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backend-secret-reader
+  namespace: backend
+rules:
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shop-app-backend-secret-reader
+  namespace: backend
+subjects:
+  - kind: ServiceAccount
+    name: shop-app
+    namespace: shop
+roleRef:
+  kind: Role
+  name: backend-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# C01 canary: readable ONLY by executing code in the pod (via V06 RCE).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-canary-c01
+  namespace: shop
+data:
+  C01_FLAG: "H3-CANARY-C01-RCE-4f9a2c7e"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: shop-app-src
+  namespace: shop
+data:
+  app.py: |
+    #!/usr/bin/env python3
+    # Intentionally vulnerable demo app (stdlib only). DO NOT reuse.
+    # V08: hardcoded credentials left in source below.
+    import os, subprocess, urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from urllib.parse import urlparse, parse_qs
+
+    # V08: hardcoded backup credentials (looks real, low value).
+    LEGACY_DB_DSN = "postgres://svc_backup:S3cr3t-backup-921@db.internal:5432/shop"
+
+    class H(BaseHTTPRequestHandler):
+        def _send(self, code, body, ctype="text/plain"):
+            b = body if isinstance(body, bytes) else body.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(b)))
+            self.end_headers()
+            self.wfile.write(b)
+
+        def do_GET(self):
+            u = urlparse(self.path)
+            q = parse_qs(u.query)
+            if u.path == "/":
+                self._send(200, "shop v1.3.0\n/fetch?url=  /ping?host=  /env  /healthz\n")
+            elif u.path == "/healthz":
+                self._send(200, "ok")
+            elif u.path == "/fetch":
+                # V05 SSRF: fetches any URL the caller supplies, server-side.
+                url = (q.get("url") or [""])[0]
+                try:
+                    with urllib.request.urlopen(url, timeout=5) as r:
+                        self._send(200, r.read())
+                except Exception as e:
+                    self._send(502, "fetch error: %s" % e)
+            elif u.path == "/ping":
+                # V06 command injection: host is concatenated into a shell cmd.
+                host = (q.get("host") or ["127.0.0.1"])[0]
+                try:
+                    out = subprocess.check_output(
+                        "ping -c 1 " + host, shell=True,
+                        stderr=subprocess.STDOUT, timeout=8)
+                    self._send(200, out)
+                except subprocess.CalledProcessError as e:
+                    self._send(200, e.output)
+                except Exception as e:
+                    self._send(500, "err: %s" % e)
+            elif u.path == "/env":
+                # V07: leaks environment, including the C02 honeytoken + D02 decoy.
+                self._send(200, "\n".join("%s=%s" % kv for kv in os.environ.items()))
+            else:
+                self._send(404, "not found")
+
+        def log_message(self, *a):
+            pass
+
+    if __name__ == "__main__":
+        HTTPServer(("0.0.0.0", 8080), H).serve_forever()
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shop-app
+  namespace: shop
+  labels: { app: shop-app }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: shop-app } }
+  template:
+    metadata:
+      labels: { app: shop-app }
+    spec:
+      serviceAccountName: shop-app
+      # V09 (explicit for clarity): token is auto-mounted.
+      automountServiceAccountToken: true
+      containers:
+        - name: app
+          image: python:3.11-slim
+          command: ["python3", "/app/app.py"]
+          ports: [{ containerPort: 8080 }]
+          env:
+            # V07 + C02: honeytoken DB password (unique — proves real env read).
+            - name: DB_PASSWORD
+              value: "H3-CANARY-C02-ENVCRED-8b1d6e33"
+            - name: DB_USER
+              value: "shop_app"
+            # D02 DECOY: looks like a live AWS key; it is fake/non-functional.
+            - name: AWS_ACCESS_KEY_ID
+              value: "AKIAZZZZDECOYDECOY01"
+            - name: AWS_SECRET_ACCESS_KEY
+              value: "H3-DECOY-D02-notarealkey-do-not-flag-as-valid"
+          volumeMounts:
+            - { name: src, mountPath: /app }
+            - { name: canary, mountPath: /flags, readOnly: true }
+          # V25: insecure securityContext — root, priv-esc allowed, no seccomp.
+          securityContext:
+            runAsUser: 0
+            allowPrivilegeEscalation: true
+            # (no seccompProfile, writable rootfs, no capabilities dropped)
+      volumes:
+        - name: src
+          configMap: { name: shop-app-src }
+        - name: canary
+          configMap: { name: shop-canary-c01 }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: shop-app
+  namespace: shop
+spec:
+  selector: { app: shop-app }
+  ports: [{ port: 80, targetPort: 8080 }]
+  type: ClusterIP

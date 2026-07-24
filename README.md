@@ -25,19 +25,24 @@ Scope is **in-cluster only** — no GCP/IAM cloud pivot (node SA left default, n
 ## Layout
 
 ```
-docs/          DESIGN.md — full kill-chain spec + ground-truth matrix (READ THIS FIRST)
-terraform/     GKE Standard cluster IaC (reusable — more clusters = one apply)
-manifests/     Vulnerable K8s YAML by stage, canaries, decoys, beacon listener
-ground-truth/  Machine-readable matrix (JSON/YAML) for auto-scoring the tool
-scripts/       deploy / verify / teardown helpers
+docs/
+  K8s-sim-design.md               Full kill-chain spec + design rationale (READ THIS FIRST)
+  k8s-ground-truth.json           Machine-readable matrix for auto-scoring the tool
+  K8s-kill-chain-verification.md  Validated end-to-end exploitation report (with evidence)
+deployment/
+  terraform/                      GKE Standard cluster IaC (reusable — more clusters = one apply)
+  manifests/                      Vulnerable K8s YAML by stage, canaries, decoys, beacon listener
+scripts/                          deploy / verify / teardown helpers
 ```
 
 ## Status
 
-🟡 **Design complete, build in progress.** See [docs/DESIGN.md](docs/DESIGN.md) for the full plan
-and [ground-truth](ground-truth/) for the labeled matrix.
+🟢 **Built, deployed, and validated end-to-end** (internet → cluster-admin; all 4 canaries fired).
+See [docs/K8s-sim-design.md](docs/K8s-sim-design.md) for the design,
+[docs/k8s-ground-truth.json](docs/k8s-ground-truth.json) for the labeled matrix, and
+[docs/K8s-kill-chain-verification.md](docs/K8s-kill-chain-verification.md) for the verification report.
 
-## Quickstart (once built)
+## Quickstart
 
 ```bash
 # 1. Auth + point at a throwaway project (you run this)
@@ -45,11 +50,17 @@ gcloud auth login
 gcloud config set project <YOUR_THROWAWAY_PROJECT_ID>
 
 # 2. Stand up the vulnerable cluster
-cd terraform && cp terraform.tfvars.example terraform.tfvars   # edit project_id
+cd deployment/terraform && cp terraform.tfvars.example terraform.tfvars   # edit project_id
 terraform init && terraform apply
+cd ../..
 
-# 3. Plant the kill chain
-../scripts/deploy.sh
+# 3. Plant the kill chain (run from repo root)
+scripts/deploy.sh
 
-# 4. Point your pentest tool at the cluster, then grade against ground-truth/
+# 4. Sanity-check, then point your pentest tool at the cluster
+scripts/verify.sh
+# ...grade the tool's output against docs/k8s-ground-truth.json
+
+# Teardown between test windows (add --cluster to also terraform destroy)
+scripts/teardown.sh
 ```

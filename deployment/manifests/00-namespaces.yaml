@@ -1,0 +1,43 @@
+# Namespaces with Pod Security Admission (PSA) labels.
+# The "privileged" enforce level on edge/shop is planted weakness V15 — it lets
+# the breakout pods (V16-V19) be scheduled. The decoy-restricted namespace
+# actually enforces "restricted" so decoy D05 is genuinely NOT exploitable.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: edge
+  labels:
+    # V15: PSA set to privileged — anything goes.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    sim.horizon3/stage: edge
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: shop
+  labels:
+    # V15: PSA privileged — foothold + breakout pods live here.
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/warn: privileged
+    sim.horizon3/stage: foothold
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: backend
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    sim.horizon3/stage: backend
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: decoy-restricted
+  labels:
+    # DECOY D05 support: this namespace REALLY enforces restricted, so the
+    # "privileged" decoy pod targeted here cannot actually be created.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    sim.horizon3/stage: decoy
