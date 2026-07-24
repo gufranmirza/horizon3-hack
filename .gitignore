@@ -1,0 +1,25 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+crash.log
+*.tfvars
+!*.tfvars.example
+.terraform.lock.hcl
+override.tf
+override.tf.json
+
+# Credentials / cluster access — NEVER commit
+*kubeconfig*
+*.pem
+*.key
+*-key.json
+sa-*.json
+gcp-credentials*.json
+.env
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
