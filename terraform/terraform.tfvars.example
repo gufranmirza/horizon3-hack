@@ -1,0 +1,12 @@
+# Copy to terraform.tfvars and edit. terraform.tfvars is gitignored.
+
+# REQUIRED — use an ISOLATED, THROWAWAY project. This cluster is insecure by design.
+project_id = "your-throwaway-project-id"
+
+# Optional overrides (defaults shown):
+# region             = "us-central1"
+# zone               = "us-central1-a"
+# cluster_name       = "pentest-sim"
+# kubernetes_version = null            # e.g. "1.29." to pin an older minor
+# node_machine_type  = "e2-standard-2"
+# node_count         = 1
